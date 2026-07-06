@@ -1,7 +1,12 @@
 #!/usr/bin/env node
 
 import path from "node:path";
-import { loadConfig, loadEnv, resolveProjectRoot } from "./lib/config.mjs";
+import {
+  applyRunnerOverride,
+  loadConfig,
+  loadEnv,
+  resolveProjectRoot,
+} from "./lib/config.mjs";
 import { discoverSqlFiles, topLevelFolder } from "./lib/discover.mjs";
 import { inferBlocksFromFolder, parseSqlFile } from "./lib/parser.mjs";
 import {
@@ -16,7 +21,6 @@ import {
   ensureMigrationTable,
   fetchAppliedMigrations,
   fetchAppliedMigrationsDesc,
-  maybeSaveCompiledSql,
   reloadSchemaCache,
   runInitBootstrap,
   runPsql,
@@ -36,6 +40,7 @@ Options:
   --save                 write compiled SQL into exportDir and still run
   --export-only          write compiled SQL and skip database execution
   --output <path>        export/save file path (relative to project root)
+  --runner <psql|docker> override database.runner from migration.config.json
   --folders a,b,c        override migration.config.json folder order
   --name <migration>     migrate:down only: rollback one migration
 
@@ -75,6 +80,7 @@ function parseArgs(argv) {
     drop: false,
     save: false,
     output: null,
+    runner: null,
     folders: null,
     name: null,
   };
@@ -101,6 +107,11 @@ function parseArgs(argv) {
     if (arg === "--output") {
       options.output = args.shift() ?? null;
       if (!options.output) throw new Error("--output requires a path");
+      continue;
+    }
+    if (arg === "--runner") {
+      options.runner = args.shift() ?? null;
+      if (!options.runner) throw new Error("--runner requires psql or docker");
       continue;
     }
     if (arg === "--folders") {
@@ -153,6 +164,13 @@ function writeSql(projectRoot, config, mode, sql, options) {
   return filePath;
 }
 
+function loadRuntimeConfig(projectRoot, options) {
+  const needsEnv = !(options.exportOnly && options.command === "init");
+  const env = needsEnv ? loadEnv(projectRoot) : null;
+  const config = applyRunnerOverride(loadConfig(projectRoot, env), options.runner);
+  return { config, env };
+}
+
 function main() {
   let options;
   try {
@@ -169,10 +187,8 @@ function main() {
   }
 
   const projectRoot = resolveProjectRoot(options.root);
-  const config = loadConfig(projectRoot);
+  const { config } = loadRuntimeConfig(projectRoot, options);
   const folders = options.folders ?? config.folders;
-  const needsEnv = !(options.exportOnly && options.command === "init");
-  const env = needsEnv ? loadEnv(projectRoot) : null;
 
   console.log("Discovering SQL files...");
   const parsedFiles = loadParsedFiles(projectRoot, folders, config.folderSuborders);
@@ -187,21 +203,21 @@ function main() {
     writeSql(projectRoot, config, "init", exportSql, options);
     if (options.exportOnly) return;
 
-    runInitBootstrap(projectRoot, config, env, options.drop);
+    runInitBootstrap(projectRoot, config, options.drop);
     writeSql(projectRoot, config, "init", compiled, {
       ...options,
       exportOnly: false,
       save: options.save && !options.output,
       output: options.output,
     });
-    runPsql(projectRoot, config, env, compiled, "init");
-    reloadSchemaCache(projectRoot, config, env);
+    runPsql(projectRoot, config, compiled, "init");
+    reloadSchemaCache(projectRoot, config);
     console.log("Init complete.");
     return;
   }
 
   if (options.command === "seed") {
-    const applied = fetchAppliedMigrations(projectRoot, config, env, {
+    const applied = fetchAppliedMigrations(projectRoot, config, {
       ensureTable: !options.exportOnly,
     });
     const compiled = compileSeed(parsedFiles, applied, config);
@@ -213,8 +229,8 @@ function main() {
     writeSql(projectRoot, config, "seed", exportSql, options);
     if (options.exportOnly) return;
 
-    ensureMigrationTable(projectRoot, config, env);
-    const appliedLive = fetchAppliedMigrations(projectRoot, config, env);
+    ensureMigrationTable(projectRoot, config);
+    const appliedLive = fetchAppliedMigrations(projectRoot, config);
     const seedSql = compileSeed(parsedFiles, appliedLive, config);
     writeSql(projectRoot, config, "seed", seedSql, {
       ...options,
@@ -222,14 +238,14 @@ function main() {
       save: options.save && !options.output,
       output: options.output,
     });
-    runPsql(projectRoot, config, env, seedSql, "seed");
-    reloadSchemaCache(projectRoot, config, env);
+    runPsql(projectRoot, config, seedSql, "seed");
+    reloadSchemaCache(projectRoot, config);
     console.log("Seed complete.");
     return;
   }
 
   if (options.command === "migrate:up") {
-    const applied = fetchAppliedMigrations(projectRoot, config, env, {
+    const applied = fetchAppliedMigrations(projectRoot, config, {
       ensureTable: !options.exportOnly,
     });
     const compiled = compileMigrateUp(parsedFiles, new Set(applied), config);
@@ -237,7 +253,7 @@ function main() {
     writeSql(projectRoot, config, "migrate_up", compiled, options);
     if (options.exportOnly) return;
 
-    const appliedLive = fetchAppliedMigrations(projectRoot, config, env);
+    const appliedLive = fetchAppliedMigrations(projectRoot, config);
     const migrateSql = compileMigrateUp(parsedFiles, new Set(appliedLive), config);
     writeSql(projectRoot, config, "migrate_up", migrateSql, {
       ...options,
@@ -245,15 +261,15 @@ function main() {
       save: options.save && !options.output,
       output: options.output,
     });
-    runPsql(projectRoot, config, env, migrateSql, "migrate:up");
-    reloadSchemaCache(projectRoot, config, env);
+    runPsql(projectRoot, config, migrateSql, "migrate:up");
+    reloadSchemaCache(projectRoot, config);
     console.log("migrate:up complete.");
     return;
   }
 
   const appliedDesc = options.exportOnly
     ? (options.name ? [options.name] : [])
-    : fetchAppliedMigrationsDesc(projectRoot, config, env);
+    : fetchAppliedMigrationsDesc(projectRoot, config);
   const targetNames = options.name
     ? [options.name]
     : appliedDesc.slice(0, 1);
@@ -274,8 +290,8 @@ function main() {
   writeSql(projectRoot, config, "migrate_down", compiled, options);
   if (options.exportOnly) return;
 
-  runPsql(projectRoot, config, env, compiled, "migrate:down");
-  reloadSchemaCache(projectRoot, config, env);
+  runPsql(projectRoot, config, compiled, "migrate:down");
+  reloadSchemaCache(projectRoot, config);
   console.log("migrate:down complete.");
 }
 

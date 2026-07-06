@@ -66,6 +66,7 @@ Your project root needs:
 | `schemaRoles` | `[]` | Roles that get schema/table/function grants on init |
 | `postgrestReload` | `false` | Send `NOTIFY pgrst, 'reload schema'` after commands |
 | `docker.service` | `postgres` | Docker Compose service name for `psql` |
+| `exportDir` | `migrations` | Default folder for `--save` / `export` output |
 
 PostgREST example:
 
@@ -88,7 +89,12 @@ sql-migrate seed
 sql-migrate migrate:up
 sql-migrate migrate:down
 sql-migrate migrate:down --name <migration>
+sql-migrate export init --drop
+sql-migrate export seed --output migrations/preview_seed.sql
+sql-migrate init --export-only --drop
 ```
+
+Export writes a single runnable SQL file (bootstrap + compiled SQL when needed) and skips Docker. Review it, edit it, then run with `psql` yourself or drop `--export-only` to execute.
 
 npm scripts example:
 
@@ -109,7 +115,9 @@ npm scripts example:
 |------|----------|--------|
 | `--root <path>` | all | project root (default: cwd) |
 | `--drop` | `init` | drop configured schema (`DROP SCHEMA ... CASCADE`) then recreate |
-| `--save` | all | write compiled SQL to `migrations/<timestamp>_<mode>.sql` |
+| `--save` | all | write compiled SQL to `exportDir` and still run |
+| `--export-only` | all | write compiled SQL and skip database execution |
+| `--output <path>` | all | custom export/save file path |
 | `--folders a,b,c` | all | override `migration.config.json` folder list |
 | `--name <migration>` | `migrate:down` | roll back that migration only |
 

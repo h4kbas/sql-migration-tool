@@ -4,12 +4,14 @@
   "description": "Directive-based SQL migration tool for Postgres projects",
   "type": "module",
   "bin": {
-    "sql-migrate": "./cli.mjs"
+    "sql-migrate": "bin/sql-migrate"
   },
   "files": [
+    "bin",
     "cli.mjs",
     "lib",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "engines": {
     "node": ">=18"

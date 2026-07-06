@@ -1,10 +1,10 @@
 {
   "name": "sql-migration-tool",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "Directive-based SQL migration tool for Postgres projects",
   "type": "module",
   "bin": {
-    "sql-migrate": "./cli.mjs"
+    "sql-migrate": "cli.mjs"
   },
   "files": [
     "cli.mjs",

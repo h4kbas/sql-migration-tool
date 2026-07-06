@@ -187,12 +187,14 @@ function main() {
   }
 
   const projectRoot = resolveProjectRoot(options.root);
-  const { config } = loadRuntimeConfig(projectRoot, options);
-  const folders = options.folders ?? config.folders;
   const modeLabel = options.exportOnly ? `export ${options.command}` : options.command;
 
   console.log(`sql-migrate ${modeLabel}`);
   console.log(`Project: ${projectRoot}`);
+
+  const { config } = loadRuntimeConfig(projectRoot, options);
+  const folders = options.folders ?? config.folders;
+
   if (!options.exportOnly || options.command !== "init") {
     logDatabaseTarget(config);
   }

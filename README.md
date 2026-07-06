@@ -51,15 +51,11 @@ Your project root needs:
   "schemaRoles": [],
   "postgrestReload": false,
   "database": {
-    "runner": "psql",
     "host": "127.0.0.1",
     "port": 5432,
     "user": "postgres",
     "password": "postgres",
     "database": "myapp"
-  },
-  "docker": {
-    "service": "postgres"
   },
   "folders": ["models", "controllers", "seeds"],
   "folderSuborders": {}
@@ -72,13 +68,11 @@ Your project root needs:
 | `migrationTable` | `migration` | Table name inside `schema` |
 | `schemaRoles` | `[]` | Roles that get schema/table/function grants on init |
 | `postgrestReload` | `false` | Send `NOTIFY pgrst, 'reload schema'` after commands |
-| `database.runner` | `psql` | `psql` for direct connection or `docker` for `docker compose exec` |
-| `database.host` | `127.0.0.1` | Postgres host for `psql` runner |
-| `database.port` | `5432` | Postgres port for `psql` runner |
+| `database.host` | `127.0.0.1` | Postgres host |
+| `database.port` | `5432` | Postgres port |
 | `database.user` | `.env POSTGRES_USER` | Postgres user |
 | `database.password` | `.env POSTGRES_PASSWORD` | Postgres password |
 | `database.database` | `.env POSTGRES_DB` | Postgres database name |
-| `docker.service` | `postgres` | Docker Compose service when `database.runner` is `docker` |
 | `exportDir` | `migrations` | Default folder for `--save` / `export` output |
 
 PostgREST example:
@@ -89,7 +83,6 @@ PostgREST example:
   "schemaRoles": ["anon", "authenticated"],
   "postgrestReload": true,
   "database": {
-    "runner": "psql",
     "host": "127.0.0.1",
     "port": 5433,
     "user": "postgres",
@@ -139,7 +132,6 @@ npm scripts example:
 | `--save` | all | write compiled SQL to `exportDir` and still run |
 | `--export-only` | all | write compiled SQL and skip database execution |
 | `--output <path>` | all | custom export/save file path |
-| `--runner <psql|docker>` | run commands | override `database.runner` |
 | `--folders a,b,c` | all | override `migration.config.json` folder list |
 | `--name <migration>` | `migrate:down` | roll back that migration only |
 
@@ -279,5 +271,5 @@ Or in `package.json`:
 ## Notes
 
 - Source of truth is SQL in `models/`, `controllers/`, `seeds/`. Saved files in `migrations/` are debug artifacts.
-- Tool runs SQL via direct `psql` or `docker compose exec` based on `database.runner`.
+- Tool runs SQL via local `psql` using `database` config and `.env` fallbacks.
 - Optional PostgREST reload when `postgrestReload` is true.

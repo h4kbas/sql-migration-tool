@@ -2,7 +2,6 @@
 
 import path from "node:path";
 import {
-  applyRunnerOverride,
   loadConfig,
   loadEnv,
   resolveProjectRoot,
@@ -41,7 +40,6 @@ Options:
   --save                 write compiled SQL into exportDir and still run
   --export-only          write compiled SQL and skip database execution
   --output <path>        export/save file path (relative to project root)
-  --runner <psql|docker> override database.runner from migration.config.json
   --folders a,b,c        override migration.config.json folder order
   --name <migration>     migrate:down only: rollback one migration
 
@@ -81,7 +79,6 @@ function parseArgs(argv) {
     drop: false,
     save: false,
     output: null,
-    runner: null,
     folders: null,
     name: null,
   };
@@ -108,11 +105,6 @@ function parseArgs(argv) {
     if (arg === "--output") {
       options.output = args.shift() ?? null;
       if (!options.output) throw new Error("--output requires a path");
-      continue;
-    }
-    if (arg === "--runner") {
-      options.runner = args.shift() ?? null;
-      if (!options.runner) throw new Error("--runner requires psql or docker");
       continue;
     }
     if (arg === "--folders") {
@@ -175,7 +167,7 @@ function writeSql(projectRoot, config, mode, sql, options) {
 function loadRuntimeConfig(projectRoot, options) {
   const needsEnv = !(options.exportOnly && options.command === "init");
   const env = needsEnv ? loadEnv(projectRoot) : null;
-  const config = applyRunnerOverride(loadConfig(projectRoot, env), options.runner);
+  const config = loadConfig(projectRoot, env);
   return { config, env };
 }
 

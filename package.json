@@ -1,6 +1,6 @@
 {
   "name": "sql-migration-tool",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "Directive-based SQL migration tool for Postgres projects",
   "type": "module",
   "bin": {
@@ -29,9 +29,7 @@
     "postgresql",
     "migration",
     "sql",
-    "schema",
-    "database",
-    "docker"
+    "schema"
   ],
   "license": "MIT",
   "private": false

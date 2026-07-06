@@ -125,10 +125,15 @@ function main() {
   const config = loadConfig(projectRoot);
   const folders = options.folders ?? config.folders;
   const env = loadEnv(projectRoot);
-  const parsedFiles = loadParsedFiles(projectRoot, folders, config.folderSuborders);
+
+  const loadSql = () => {
+    console.log("Discovering SQL files...");
+    return loadParsedFiles(projectRoot, folders, config.folderSuborders);
+  };
 
   if (options.command === "init") {
     runInitBootstrap(projectRoot, config, env, options.drop);
+    const parsedFiles = loadSql();
     const sql = compileInit(parsedFiles);
     maybeSaveCompiledSql(projectRoot, "init", sql, options.save);
     runPsql(projectRoot, config, env, sql, "init");
@@ -140,6 +145,7 @@ function main() {
   if (options.command === "seed") {
     ensureMigrationTable(projectRoot, config, env);
     const applied = fetchAppliedMigrations(projectRoot, config, env);
+    const parsedFiles = loadSql();
     const sql = compileSeed(parsedFiles, applied, config);
     maybeSaveCompiledSql(projectRoot, "seed", sql, options.save);
     runPsql(projectRoot, config, env, sql, "seed");
@@ -151,6 +157,7 @@ function main() {
   if (options.command === "migrate:up") {
     const applied = fetchAppliedMigrations(projectRoot, config, env);
     const appliedNames = new Set(applied);
+    const parsedFiles = loadSql();
     const sql = compileMigrateUp(parsedFiles, appliedNames, config);
     maybeSaveCompiledSql(projectRoot, "migrate_up", sql, options.save);
     runPsql(projectRoot, config, env, sql, "migrate:up");
@@ -175,6 +182,7 @@ function main() {
       throw new Error(`Migration not applied: ${notApplied.join(", ")}`);
     }
 
+    const parsedFiles = loadSql();
     const sql = compileMigrateDown(parsedFiles, targetNames, config);
     maybeSaveCompiledSql(projectRoot, "migrate_down", sql, options.save);
     runPsql(projectRoot, config, env, sql, "migrate:down");

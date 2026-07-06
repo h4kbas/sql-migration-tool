@@ -34,13 +34,47 @@ Your project root needs:
 
 ```
 <project-root>/
-  migration.config.json   # optional folder order
+  migration.config.json   # schema, folders, docker service
   .env                    # POSTGRES_USER, POSTGRES_DB
-  docker-compose.yml      # postgres service named "postgres"
+  docker-compose.yml
   models/
   controllers/
   seeds/
   migrations/             # --save output only
+```
+
+### `migration.config.json`
+
+```json
+{
+  "schema": "public",
+  "migrationTable": "migration",
+  "schemaRoles": [],
+  "postgrestReload": false,
+  "docker": {
+    "service": "postgres"
+  },
+  "folders": ["models", "controllers", "seeds"],
+  "folderSuborders": {}
+}
+```
+
+| Field | Default | Meaning |
+|-------|---------|---------|
+| `schema` | `public` | Postgres schema for bootstrap and migration table |
+| `migrationTable` | `migration` | Table name inside `schema` |
+| `schemaRoles` | `[]` | Roles that get schema/table/function grants on init |
+| `postgrestReload` | `false` | Send `NOTIFY pgrst, 'reload schema'` after commands |
+| `docker.service` | `postgres` | Docker Compose service name for `psql` |
+
+PostgREST example:
+
+```json
+{
+  "schema": "api",
+  "schemaRoles": ["anon", "authenticated"],
+  "postgrestReload": true
+}
 ```
 
 Run commands from project root (or pass `--root`).
@@ -74,7 +108,7 @@ npm scripts example:
 | Flag | Commands | Effect |
 |------|----------|--------|
 | `--root <path>` | all | project root (default: cwd) |
-| `--drop` | `init` | `DROP SCHEMA api CASCADE` then recreate |
+| `--drop` | `init` | drop configured schema (`DROP SCHEMA ... CASCADE`) then recreate |
 | `--save` | all | write compiled SQL to `migrations/<timestamp>_<mode>.sql` |
 | `--folders a,b,c` | all | override `migration.config.json` folder list |
 | `--name <migration>` | `migrate:down` | roll back that migration only |
@@ -111,16 +145,16 @@ Do not put existing-DB-only changes in `@model`. Use `@migration`.
 ### `@migration` / `@migration:down`
 
 - `migrate:up` runs pending `// @migration` blocks in file discovery order.
-- After each migration runs, tool inserts into `api.migration`.
+- After each migration runs, tool inserts into `<schema>.<migrationTable>`.
 - Already-applied migrations are skipped.
-- `migrate:down` runs matching `// @migration:down` SQL and deletes the row from `api.migration`.
+- `migrate:down` runs matching `// @migration:down` SQL and deletes the row from the migration table.
 - Without `--name`, `migrate:down` rolls back the most recently applied migration.
 
 Migration names must be unique. Use a timestamp prefix, e.g. `20260706120000_add_note_column`.
 
 ### `@defer`
 
-`// @defer <migration_name>` makes the next block (or inline defer block) wait until `<migration_name>` is in `api.migration`.
+`// @defer <migration_name>` makes the next block (or inline defer block) wait until `<migration_name>` is in the migration table.
 
 ```sql
 // @defer 20260706120000_add_note_column
@@ -163,19 +197,21 @@ ALTER TABLE api.users ALTER COLUMN note SET DEFAULT 'ok';
 ### `migrate:up`
 
 - freestanding SQL (all files)
-- `@migration` blocks not yet in `api.migration`
+- `@migration` blocks not yet in the migration table
 - `@defer` blocks whose dependencies are applied
 
 ### `migrate:down`
 
 - freestanding SQL (all files)
 - `@migration:down` for target migration(s)
-- `DELETE FROM api.migration WHERE name = ...`
+- `DELETE FROM <schema>.<migrationTable> WHERE name = ...`
 
-## `api.migration` table
+## Migration table
+
+Created automatically before seed/migrate in the configured schema:
 
 ```sql
-CREATE TABLE IF NOT EXISTS api.migration (
+CREATE TABLE IF NOT EXISTS <schema>.<migrationTable> (
   name text PRIMARY KEY,
   applied_at timestamptz NOT NULL DEFAULT now()
 );
@@ -213,5 +249,5 @@ Or in `package.json`:
 ## Notes
 
 - Source of truth is SQL in `models/`, `controllers/`, `seeds/`. Saved files in `migrations/` are debug artifacts.
-- Tool runs SQL via `docker compose exec postgres psql` using `.env`.
-- Sends `NOTIFY pgrst, 'reload schema'` after each command for PostgREST projects.
+- Tool runs SQL via `docker compose exec <docker.service> psql` using `.env`.
+- Optional PostgREST reload when `postgrestReload` is true.

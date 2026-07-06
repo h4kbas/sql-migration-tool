@@ -14,7 +14,7 @@ import {
   fetchAppliedMigrations,
   fetchAppliedMigrationsDesc,
   maybeSaveCompiledSql,
-  reloadPostgrest,
+  reloadSchemaCache,
   runInitBootstrap,
   runPsql,
 } from "./lib/exec.mjs";
@@ -27,7 +27,7 @@ function printUsage() {
 
 Options:
   --root <path>          project root (default: cwd)
-  --drop                 init only: drop and recreate api schema first
+  --drop                 init only: drop and recreate configured schema first
   --save                 write compiled SQL into migrations/
   --folders a,b,c        override migration.config.json folder order
   --name <migration>     migrate:down only: rollback one migration
@@ -128,39 +128,39 @@ function main() {
   const parsedFiles = loadParsedFiles(projectRoot, folders, config.folderSuborders);
 
   if (options.command === "init") {
-    runInitBootstrap(projectRoot, env, options.drop);
+    runInitBootstrap(projectRoot, config, env, options.drop);
     const sql = compileInit(parsedFiles);
     maybeSaveCompiledSql(projectRoot, "init", sql, options.save);
-    runPsql(projectRoot, env, sql, "init");
-    reloadPostgrest(projectRoot, env);
+    runPsql(projectRoot, config, env, sql, "init");
+    reloadSchemaCache(projectRoot, config, env);
     console.log("Init complete.");
     return;
   }
 
   if (options.command === "seed") {
-    ensureMigrationTable(projectRoot, env);
-    const applied = fetchAppliedMigrations(projectRoot, env);
-    const sql = compileSeed(parsedFiles, applied);
+    ensureMigrationTable(projectRoot, config, env);
+    const applied = fetchAppliedMigrations(projectRoot, config, env);
+    const sql = compileSeed(parsedFiles, applied, config);
     maybeSaveCompiledSql(projectRoot, "seed", sql, options.save);
-    runPsql(projectRoot, env, sql, "seed");
-    reloadPostgrest(projectRoot, env);
+    runPsql(projectRoot, config, env, sql, "seed");
+    reloadSchemaCache(projectRoot, config, env);
     console.log("Seed complete.");
     return;
   }
 
   if (options.command === "migrate:up") {
-    const applied = fetchAppliedMigrations(projectRoot, env);
+    const applied = fetchAppliedMigrations(projectRoot, config, env);
     const appliedNames = new Set(applied);
-    const sql = compileMigrateUp(parsedFiles, appliedNames);
+    const sql = compileMigrateUp(parsedFiles, appliedNames, config);
     maybeSaveCompiledSql(projectRoot, "migrate_up", sql, options.save);
-    runPsql(projectRoot, env, sql, "migrate:up");
-    reloadPostgrest(projectRoot, env);
+    runPsql(projectRoot, config, env, sql, "migrate:up");
+    reloadSchemaCache(projectRoot, config, env);
     console.log("migrate:up complete.");
     return;
   }
 
   if (options.command === "migrate:down") {
-    const appliedDesc = fetchAppliedMigrationsDesc(projectRoot, env);
+    const appliedDesc = fetchAppliedMigrationsDesc(projectRoot, config, env);
     const targetNames = options.name
       ? [options.name]
       : appliedDesc.slice(0, 1);
@@ -175,10 +175,10 @@ function main() {
       throw new Error(`Migration not applied: ${notApplied.join(", ")}`);
     }
 
-    const sql = compileMigrateDown(parsedFiles, targetNames);
+    const sql = compileMigrateDown(parsedFiles, targetNames, config);
     maybeSaveCompiledSql(projectRoot, "migrate_down", sql, options.save);
-    runPsql(projectRoot, env, sql, "migrate:down");
-    reloadPostgrest(projectRoot, env);
+    runPsql(projectRoot, config, env, sql, "migrate:down");
+    reloadSchemaCache(projectRoot, config, env);
     console.log("migrate:down complete.");
   }
 }

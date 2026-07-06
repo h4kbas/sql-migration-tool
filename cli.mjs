@@ -26,6 +26,7 @@ import {
   runPsql,
   saveCompiledSql,
 } from "./lib/exec.mjs";
+import { logDatabaseTarget, logSqlStats, logStep } from "./lib/log.mjs";
 
 const RUN_MODES = new Set(["init", "seed", "migrate:up", "migrate:down"]);
 
@@ -132,9 +133,15 @@ function parseArgs(argv) {
 }
 
 function loadParsedFiles(projectRoot, folders, folderSuborders = {}) {
+  logStep(`Discovering SQL files in ${folders.join(", ")}...`);
   const files = discoverSqlFiles(projectRoot, folders, folderSuborders);
+  console.log(`Found ${files.length} SQL files`);
 
-  return files.map((filePath) => {
+  return files.map((filePath, index) => {
+    if (index === 0 || (index + 1) % 10 === 0 || index + 1 === files.length) {
+      console.log(`Parsing ${index + 1}/${files.length}...`);
+    }
+
     const folder = topLevelFolder(projectRoot, filePath, folders);
     const parsed = parseSqlFile(filePath);
     return inferBlocksFromFolder(folder, parsed);
@@ -155,6 +162,7 @@ function writeSql(projectRoot, config, mode, sql, options) {
   });
 
   if (options.exportOnly) {
+    logSqlStats("Exported SQL", sql);
     console.log(`Exported SQL to ${path.relative(projectRoot, filePath)}`);
     console.log("Skipped database execution.");
     return filePath;
@@ -189,12 +197,21 @@ function main() {
   const projectRoot = resolveProjectRoot(options.root);
   const { config } = loadRuntimeConfig(projectRoot, options);
   const folders = options.folders ?? config.folders;
+  const modeLabel = options.exportOnly ? `export ${options.command}` : options.command;
 
-  console.log("Discovering SQL files...");
+  console.log(`sql-migrate ${modeLabel}`);
+  console.log(`Project: ${projectRoot}`);
+  if (!options.exportOnly || options.command !== "init") {
+    logDatabaseTarget(config);
+  }
+
   const parsedFiles = loadParsedFiles(projectRoot, folders, config.folderSuborders);
 
   if (options.command === "init") {
+    logStep("Compiling init SQL...");
     const compiled = compileInit(parsedFiles);
+    logSqlStats("Compiled init SQL", compiled);
+
     const exportSql = joinSql([
       buildSchemaBootstrapSql(config, options.drop),
       compiled,
@@ -220,7 +237,11 @@ function main() {
     const applied = fetchAppliedMigrations(projectRoot, config, {
       ensureTable: !options.exportOnly,
     });
+
+    logStep("Compiling seed SQL...");
     const compiled = compileSeed(parsedFiles, applied, config);
+    logSqlStats("Compiled seed SQL", compiled);
+
     const exportSql = joinSql([
       buildMigrationTableSql(config.migrationQualified),
       compiled,
@@ -248,7 +269,10 @@ function main() {
     const applied = fetchAppliedMigrations(projectRoot, config, {
       ensureTable: !options.exportOnly,
     });
+
+    logStep("Compiling migrate:up SQL...");
     const compiled = compileMigrateUp(parsedFiles, new Set(applied), config);
+    logSqlStats("Compiled migrate:up SQL", compiled);
 
     writeSql(projectRoot, config, "migrate_up", compiled, options);
     if (options.exportOnly) return;
@@ -286,7 +310,11 @@ function main() {
     }
   }
 
+  logStep("Compiling migrate:down SQL...");
   const compiled = compileMigrateDown(parsedFiles, targetNames, config);
+  logSqlStats("Compiled migrate:down SQL", compiled);
+  console.log(`Rolling back: ${targetNames.join(", ")}`);
+
   writeSql(projectRoot, config, "migrate_down", compiled, options);
   if (options.exportOnly) return;
 

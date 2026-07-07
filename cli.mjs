@@ -19,6 +19,7 @@ import {
   buildSchemaBootstrapSql,
   ensureMigrationTable,
   fetchAppliedMigrations,
+  fetchAppliedMigrationsSafe,
   fetchAppliedMigrationsDesc,
   reloadSchemaCache,
   runInitBootstrap,
@@ -50,7 +51,7 @@ Directives:
   // @seed                seed command only
   // @migration <name>    migrate:up only
   // @migration:down <name>
-  // @defer <migration>   waits for applied migration (seed / migrate:up)
+  // @defer <migration>   runs when migration applied (all commands, skipped until then)
 `);
 }
 
@@ -202,8 +203,12 @@ function main() {
   const parsedFiles = loadParsedFiles(projectRoot, folders, config.folderSuborders);
 
   if (options.command === "init") {
+    const applied = options.exportOnly
+      ? []
+      : fetchAppliedMigrationsSafe(projectRoot, config);
+
     logStep("Compiling init SQL...");
-    const compiled = compileInit(parsedFiles);
+    const compiled = compileInit(parsedFiles, applied, config);
     logSqlStats("Compiled init SQL", compiled);
 
     const exportSql = joinSql([
@@ -304,8 +309,12 @@ function main() {
     }
   }
 
+  const appliedForDefer = options.exportOnly
+    ? []
+    : fetchAppliedMigrationsSafe(projectRoot, config);
+
   logStep("Compiling migrate:down SQL...");
-  const compiled = compileMigrateDown(parsedFiles, targetNames, config);
+  const compiled = compileMigrateDown(parsedFiles, targetNames, config, appliedForDefer);
   logSqlStats("Compiled migrate:down SQL", compiled);
   console.log(`Rolling back: ${targetNames.join(", ")}`);
 

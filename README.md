@@ -146,7 +146,7 @@ Put directives on their own line: `// @<kind> [name]`
 | `// @seed` | `seed` only | Seed data |
 | `// @migration <name>` | `migrate:up` only | Forward migration |
 | `// @migration:down <name>` | `migrate:down` only | Rollback SQL for that migration |
-| `// @defer <migration>` | `seed`, `migrate:up` | Wait until named migration is applied |
+| `// @defer <migration>` | every command | Runs when named migration is applied; skipped until then |
 
 SQL below a directive belongs to that block until the next directive.
 
@@ -187,8 +187,10 @@ UPDATE api.users SET note = 'ok';
 ALTER TABLE api.users ALTER COLUMN note SET DEFAULT 'ok';
 ```
 
-- On `seed` or `migrate:up`, deferred SQL runs only after its dependency migration is applied.
-- If dependency is missing, compile fails: `Unresolved // @defer migration dependencies`.
+- Runs on every command (`init`, `seed`, `migrate:up`, `migrate:down`), like freestanding SQL.
+- SQL is included only after every named dependency migration is in the migration table.
+- If dependencies are not applied yet, the block is skipped (no error).
+- On `migrate:up`, a `// @migration` block still waits for its `// @defer` dependencies before it runs.
 - Multiple `// @defer` lines before one block add multiple dependencies (all must be applied).
 
 ### Files without directives
@@ -208,7 +210,8 @@ ALTER TABLE api.users ALTER COLUMN note SET DEFAULT 'ok';
 
 - `@model` blocks (all files, in discovery order)
 - then freestanding SQL per file (in discovery order)
-- does not run `@seed`, `@migration`, or `@defer`
+- `@defer` blocks whose dependencies are already applied
+- does not run `@seed` or `@migration`
 
 ### `seed`
 
@@ -225,6 +228,7 @@ ALTER TABLE api.users ALTER COLUMN note SET DEFAULT 'ok';
 ### `migrate:down`
 
 - freestanding SQL (all files)
+- `@defer` blocks whose dependencies are still applied
 - `@migration:down` for target migration(s)
 - `DELETE FROM <schema>.<migrationTable> WHERE name = ...`
 

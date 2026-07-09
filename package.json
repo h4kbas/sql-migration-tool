@@ -1,6 +1,6 @@
 {
   "name": "sql-migration-tool",
-  "version": "1.0.11",
+  "version": "1.0.12",
   "description": "Directive-based SQL migration tool for Postgres projects",
   "type": "module",
   "bin": {

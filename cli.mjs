@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   loadConfig,
   loadEnv,
+  parseEnvFile,
   resolveProjectRoot,
 } from "./lib/config.mjs";
 import { discoverSqlFiles, topLevelFolder } from "./lib/discover.mjs";
@@ -52,6 +53,8 @@ Directives:
   // @migration <name>    migrate:up only
   // @migration:down <name>
   // @defer <migration>   runs when migration applied (all commands, skipped until then)
+  // @include <path>      inline SQL (package/path.sql or relative path)
+  // ${ENV_VAR}            replaced from .env when SQL is compiled/run
 `);
 }
 
@@ -125,7 +128,7 @@ function parseArgs(argv) {
   return options;
 }
 
-function loadParsedFiles(projectRoot, folders, folderSuborders = {}) {
+function loadParsedFiles(projectRoot, folders, folderSuborders = {}, env = {}) {
   logStep(`Discovering SQL files in ${folders.join(", ")}...`);
   const files = discoverSqlFiles(projectRoot, folders, folderSuborders);
   console.log(`Found ${files.length} SQL files`);
@@ -136,7 +139,7 @@ function loadParsedFiles(projectRoot, folders, folderSuborders = {}) {
     }
 
     const folder = topLevelFolder(projectRoot, filePath, folders);
-    const parsed = parseSqlFile(filePath);
+    const parsed = parseSqlFile(filePath, projectRoot, env);
     return inferBlocksFromFolder(folder, parsed);
   });
 }
@@ -166,9 +169,16 @@ function writeSql(projectRoot, config, mode, sql, options) {
 }
 
 function loadRuntimeConfig(projectRoot, options) {
-  const needsEnv = !(options.exportOnly && options.command === "init");
-  const env = needsEnv ? loadEnv(projectRoot) : null;
-  const config = loadConfig(projectRoot, env);
+  const needsDbEnv = !(options.exportOnly && options.command === "init");
+  const env = parseEnvFile(projectRoot);
+
+  if (needsDbEnv) {
+    if (!env.POSTGRES_USER || !env.POSTGRES_DB) {
+      throw new Error("Missing .env file or POSTGRES_USER/POSTGRES_DB. Copy .env.example to .env first.");
+    }
+  }
+
+  const config = loadConfig(projectRoot, needsDbEnv ? env : null);
   return { config, env };
 }
 
@@ -193,14 +203,14 @@ function main() {
   console.log(`sql-migrate ${modeLabel}`);
   console.log(`Project: ${projectRoot}`);
 
-  const { config } = loadRuntimeConfig(projectRoot, options);
+  const { config, env } = loadRuntimeConfig(projectRoot, options);
   const folders = options.folders ?? config.folders;
 
   if (!options.exportOnly || options.command !== "init") {
     logDatabaseTarget(config);
   }
 
-  const parsedFiles = loadParsedFiles(projectRoot, folders, config.folderSuborders);
+  const parsedFiles = loadParsedFiles(projectRoot, folders, config.folderSuborders, env);
 
   if (options.command === "init") {
     const applied = options.exportOnly

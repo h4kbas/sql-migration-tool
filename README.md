@@ -1,8 +1,8 @@
 # sql-migration-tool
 
-Directive-based SQL migration tool for Postgres. Compiles `// @model`, `// @seed`, `// @migration`, and `// @defer` blocks from SQL source files into runnable migrations.
+Directive-based SQL migration tool for Postgres. Compiles `// @model`, `// @seed`, `// @migration`, `// @defer`, and `// @include` blocks from SQL source files into runnable migrations. Supports `${ENV_VAR}` substitution from `.env`.
 
-Works with any backend that keeps schema SQL in repo folders and runs Postgres via Docker Compose.
+Works with any backend that keeps schema SQL in repo folders and connects via local `psql`.
 
 ## Install
 
@@ -35,7 +35,7 @@ Your project root needs:
 ```
 <project-root>/
   migration.config.json   # schema, database connection, folders
-  .env                    # optional fallback for database credentials
+  .env                    # database credentials + ${ENV_VAR} substitution in SQL
   models/
   controllers/
   seeds/
@@ -58,9 +58,13 @@ Your project root needs:
     "database": "myapp"
   },
   "folders": ["models", "controllers", "seeds"],
-  "folderSuborders": {}
+  "folderSuborders": {
+    "seeds": ["base", "dev"]
+  }
 }
 ```
+
+`folderSuborders` runs named subfolders first, then any others alphabetically. Example: `seeds/base/*.sql` before `seeds/dev/*.sql`.
 
 | Field | Default | Meaning |
 |-------|---------|---------|
@@ -68,8 +72,8 @@ Your project root needs:
 | `migrationTable` | `migration` | Table name inside `schema` |
 | `schemaRoles` | `[]` | Roles that get schema/table/function grants on init |
 | `postgrestReload` | `false` | Send `NOTIFY pgrst, 'reload schema'` after commands |
-| `database.host` | `127.0.0.1` | Postgres host |
-| `database.port` | `5432` | Postgres port |
+| `database.host` | `127.0.0.1` or `.env POSTGRES_HOST` | Postgres host |
+| `database.port` | `5432` or `.env POSTGRES_PORT` | Postgres port |
 | `database.user` | `.env POSTGRES_USER` | Postgres user |
 | `database.password` | `.env POSTGRES_PASSWORD` | Postgres password |
 | `database.database` | `.env POSTGRES_DB` | Postgres database name |
@@ -80,6 +84,7 @@ PostgREST example:
 ```json
 {
   "schema": "api",
+  "migrationTable": "migration",
   "schemaRoles": ["anon", "authenticated"],
   "postgrestReload": true,
   "database": {
@@ -87,12 +92,157 @@ PostgREST example:
     "port": 5433,
     "user": "postgres",
     "password": "postgres",
-    "database": "trofy"
-  }
+    "database": "myapp"
+  },
+  "folders": ["models", "controllers", "seeds"]
 }
 ```
 
 Run commands from project root (or pass `--root`).
+
+### `.env`
+
+Required for commands that connect to the database (`seed`, `migrate:up`, `migrate:down`, and `init` without `--export-only`). Must define:
+
+```
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=postgres
+POSTGRES_DB=myapp
+POSTGRES_HOST=127.0.0.1
+POSTGRES_PORT=5432
+
+# also used in SQL via ${API_KEY}
+API_KEY=dev-secret
+```
+
+Optional fallbacks when omitted from `migration.config.json`: `POSTGRES_PASSWORD`, `POSTGRES_HOST`, `POSTGRES_PORT`.
+
+Any key in `.env` is also available for `${ENV_VAR}` substitution in SQL files (see below). Quoted values are supported.
+
+`init --export-only` does not require database credentials but still reads `.env` for `${ENV_VAR}` substitution.
+
+## Example project
+
+Examples below assume `"schema": "api"` in `migration.config.json` (see PostgREST example).
+
+```
+myapp/
+  migration.config.json
+  .env
+  models/
+    001_users.sql
+    002_posts.sql
+  controllers/
+    users_view.sql
+    posts_rpc.sql
+  seeds/
+    dev_users.sql
+    dev_posts.sql
+  migrations/              # --save / export output only
+```
+
+`models/001_users.sql`:
+
+```sql
+// @model
+CREATE TABLE api.users (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  email text NOT NULL UNIQUE,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+```
+
+`models/002_posts.sql`:
+
+```sql
+// @include ./shared/extensions.sql
+
+// @model
+CREATE TABLE api.posts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES api.users (id),
+  title text NOT NULL,
+  body text
+);
+```
+
+`models/shared/extensions.sql`:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+```
+
+`controllers/users_view.sql`:
+
+```sql
+DROP VIEW IF EXISTS api.users_public;
+CREATE VIEW api.users_public AS
+SELECT id, email, created_at
+FROM api.users;
+```
+
+`seeds/dev_users.sql` (no directive needed in `seeds/`):
+
+```sql
+INSERT INTO api.users (email) VALUES
+  ('alice@example.com'),
+  ('bob@example.com');
+```
+
+`seeds/dev_posts.sql`:
+
+```sql
+// @seed
+INSERT INTO api.posts (user_id, title, body)
+SELECT id, 'Hello', 'First post'
+FROM api.users
+WHERE email = 'alice@example.com';
+```
+
+`models/003_add_note.sql` (later schema change):
+
+```sql
+// @migration 20260706120000_add_note_column
+ALTER TABLE api.users ADD COLUMN note text;
+UPDATE api.users SET note = 'legacy' WHERE note IS NULL;
+
+// @migration:down 20260706120000_add_note_column
+ALTER TABLE api.users DROP COLUMN note;
+```
+
+`controllers/users_view.sql` (view without `note` first; defer recreates it after column migration):
+
+```sql
+DROP VIEW IF EXISTS api.users_public;
+CREATE VIEW api.users_public AS
+SELECT id, email, created_at
+FROM api.users;
+
+// @defer 20260706120000_add_note_column
+DROP VIEW IF EXISTS api.users_public;
+CREATE VIEW api.users_public AS
+SELECT id, email, note, created_at
+FROM api.users;
+```
+
+One-time data backfills belong in `// @migration`, not `// @defer`.
+
+Typical workflow:
+
+```bash
+sql-migrate init --drop          # schema from // @model, views from controllers/
+sql-migrate seed                 # seed data
+sql-migrate migrate:up           # apply pending // @migration blocks
+sql-migrate migrate:down         # roll back latest migration
+sql-migrate migrate:down --name 20260706120000_add_note_column
+```
+
+Preview compiled SQL without touching the database:
+
+```bash
+sql-migrate export init --drop --output migrations/preview_init.sql
+sql-migrate export migrate:up --output migrations/preview_up.sql
+```
 
 ## Commands
 
@@ -102,23 +252,25 @@ sql-migrate init --drop
 sql-migrate seed
 sql-migrate migrate:up
 sql-migrate migrate:down
-sql-migrate migrate:down --name <migration>
+sql-migrate migrate:down --name 20260706120000_add_note_column
+sql-migrate init --save
+sql-migrate migrate:up --export-only --output migrations/review_up.sql
 sql-migrate export init --drop
 sql-migrate export seed --output migrations/preview_seed.sql
-sql-migrate init --export-only --drop
 ```
 
-Export writes a single runnable SQL file (bootstrap + compiled SQL when needed) and skips Docker. Review it, edit it, then run with `psql` yourself or drop `--export-only` to execute.
+Export writes a single runnable SQL file (bootstrap + compiled SQL when needed) and skips database execution. Review it, edit it, then run with `psql` yourself or drop `--export-only` to execute.
 
 npm scripts example:
 
 ```json
 {
   "scripts": {
-    "db:init": "sql-migrate init",
+    "db:init": "sql-migrate init --drop",
     "db:seed": "sql-migrate seed",
     "db:migrate:up": "sql-migrate migrate:up",
-    "db:migrate:down": "sql-migrate migrate:down"
+    "db:migrate:down": "sql-migrate migrate:down",
+    "db:export:up": "sql-migrate export migrate:up --output migrations/preview_up.sql"
   }
 }
 ```
@@ -147,20 +299,60 @@ Put directives on their own line: `// @<kind> [name]`
 | `// @migration <name>` | `migrate:up` only | Forward migration |
 | `// @migration:down <name>` | `migrate:down` only | Rollback SQL for that migration |
 | `// @defer <migration>` | every command | Runs when named migration is applied; skipped until then |
+| `// @include <path>` | parse time | Inlines SQL from another file (see below) |
 
 SQL below a directive belongs to that block until the next directive.
+
+`// @include` is not a block directive. It is expanded before directives are parsed.
 
 ### Freestanding SQL
 
 Anything before the first `// @` in a file is freestanding. It runs on every command (`init`, `seed`, `migrate:up`, `migrate:down`).
 
-Use for views, functions, triggers (with `DROP ... IF EXISTS` before `CREATE`).
+Use in `controllers/` for views, functions, triggers. Always drop first so re-runs are safe:
+
+```sql
+DROP FUNCTION IF EXISTS api.current_user_id();
+CREATE FUNCTION api.current_user_id()
+RETURNS uuid
+LANGUAGE sql
+STABLE
+AS $$
+  SELECT nullif(current_setting('request.jwt.claim.sub', true), '')::uuid;
+$$;
+```
+
+Same file can mix freestanding SQL and `@migration` blocks:
+
+```sql
+DROP VIEW IF EXISTS api.users_public;
+CREATE VIEW api.users_public AS SELECT id, email FROM api.users;
+
+// @migration 20260706140000_add_status_column
+ALTER TABLE api.users ADD COLUMN status text NOT NULL DEFAULT 'active';
+
+// @migration:down 20260706140000_add_status_column
+ALTER TABLE api.users DROP COLUMN status;
+```
 
 ### `@model` (init only)
 
 - Runs only on `init`.
+- Required in `models/` files. SQL in `models/` without a directive is ignored.
 - Defines tables, types, indexes on a fresh DB.
 - Per file order in `init`: `@model` blocks first, then freestanding SQL in the same file.
+
+Example:
+
+```sql
+// @model
+CREATE TABLE api.organizations (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name text NOT NULL
+);
+
+CREATE INDEX organizations_name_idx ON api.organizations (name);
+```
 
 Do not put existing-DB-only changes in `@model`. Use `@migration`.
 
@@ -172,31 +364,159 @@ Do not put existing-DB-only changes in `@model`. Use `@migration`.
 - `migrate:down` runs matching `// @migration:down` SQL and deletes the row from the migration table.
 - Without `--name`, `migrate:down` rolls back the most recently applied migration.
 
-Migration names must be unique. Use a timestamp prefix, e.g. `20260706120000_add_note_column`.
+Migration names must be unique. Use a timestamp prefix.
+
+Forward + rollback in one file:
+
+```sql
+// @migration 20260706120000_add_note_column
+ALTER TABLE api.users ADD COLUMN note text;
+
+// @migration:down 20260706120000_add_note_column
+ALTER TABLE api.users DROP COLUMN note;
+```
+
+Split across files (same migration name):
+
+`models/003_add_note.sql`:
+
+```sql
+// @migration 20260706120000_add_note_column
+ALTER TABLE api.users ADD COLUMN note text;
+```
+
+`models/003_add_note.down.sql`:
+
+```sql
+// @migration:down 20260706120000_add_note_column
+ALTER TABLE api.users DROP COLUMN note;
+```
 
 ### `@defer`
 
-`// @defer <migration_name>` makes the next block (or inline defer block) wait until `<migration_name>` is in the migration table.
+`// @defer <migration_name>` makes the next block wait until that migration is in the migration table.
+
+**Important:** defer blocks run on every command (`init`, `seed`, `migrate:up`, `migrate:down`) once dependencies are met, like freestanding SQL. Use only for idempotent SQL (`DROP ... IF EXISTS` + `CREATE`, safe `CREATE OR REPLACE`). One-time changes (backfills, `UPDATE`, `INSERT`) belong in `// @migration`.
+
+View that depends on a column added by a migration:
 
 ```sql
 // @defer 20260706120000_add_note_column
-UPDATE api.users SET note = 'ok';
+DROP VIEW IF EXISTS api.users_public;
+CREATE VIEW api.users_public AS
+SELECT id, email, note, created_at
+FROM api.users;
+```
 
+Function that references a new column:
+
+```sql
+// @defer 20260706120000_add_note_column
+DROP FUNCTION IF EXISTS api.user_label(api.users);
+CREATE FUNCTION api.user_label(u api.users)
+RETURNS text
+LANGUAGE sql
+STABLE
+AS $$
+  SELECT u.email || coalesce(' (' || u.note || ')', '');
+$$;
+```
+
+Migration that must run after another migration (the `// @migration` block itself runs once on `migrate:up`):
+
+```sql
 // @defer 20260706120000_add_note_column
 // @migration 20260706130000_set_note_default
 ALTER TABLE api.users ALTER COLUMN note SET DEFAULT 'ok';
 ```
 
-- Runs on every command (`init`, `seed`, `migrate:up`, `migrate:down`), like freestanding SQL.
+One-time backfill goes in the migration, not defer:
+
+```sql
+// @migration 20260706120000_add_note_column
+ALTER TABLE api.users ADD COLUMN note text;
+UPDATE api.users SET note = 'legacy' WHERE note IS NULL;
+
+// @migration:down 20260706120000_add_note_column
+ALTER TABLE api.users DROP COLUMN note;
+```
+
 - SQL is included only after every named dependency migration is in the migration table.
 - If dependencies are not applied yet, the block is skipped (no error).
 - On `migrate:up`, a `// @migration` block still waits for its `// @defer` dependencies before it runs.
 - Multiple `// @defer` lines before one block add multiple dependencies (all must be applied).
 
+### `@include`
+
+Put on its own line: `// @include <path>`. Expanded before directives are parsed.
+
+Share extensions across model files:
+
+`models/001_users.sql`:
+
+```sql
+// @include ./shared/extensions.sql
+
+// @model
+CREATE TABLE api.users (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid()
+);
+```
+
+Relative to the current file:
+
+```sql
+// @include ./shared/types.sql
+// @include ../common/grants.sql
+```
+
+From an npm package (resolved to `node_modules/<package>/sql/<path>`):
+
+```sql
+// @include my-shared-sql/extensions/uuid.sql
+```
+
+Package layout:
+
+```
+node_modules/my-shared-sql/
+  sql/
+    extensions/uuid.sql
+```
+
+- Included files are expanded recursively.
+- Circular includes fail with an error.
+- After expansion, `${ENV_VAR}` substitution runs on the combined content.
+
+### `${ENV_VAR}` substitution
+
+Use `${UPPER_SNAKE_CASE}` placeholders in SQL. Values come from `.env` at compile/run time.
+
+Per-environment seed data:
+
+```sql
+// @seed
+INSERT INTO api.settings (key, value) VALUES
+  ('api_key', '${API_KEY}'),
+  ('env', '${APP_ENV}');
+```
+
+`.env`:
+
+```
+API_KEY=dev-secret
+APP_ENV=development
+```
+
+- Missing variables become an empty string (SQL-escaped).
+- Works inside included files too.
+- Useful for secrets or per-environment values without duplicating SQL files.
+
 ### Files without directives
 
 - `seeds/` files with no directives are treated as one `// @seed` block.
-- `models/` and `controllers/` files with no directives are freestanding only.
+- `models/` files with no directives are ignored; use explicit `// @model`.
+- `controllers/` files with no directives are freestanding only.
 
 ## File discovery order
 
@@ -243,37 +563,10 @@ CREATE TABLE IF NOT EXISTS <schema>.<migrationTable> (
 );
 ```
 
-## Publish
-
-npm: https://www.npmjs.com/~h4kbas
-
-```bash
-cd sql-migration-tool
-npm login
-npm publish
-```
-
-GitHub (optional):
-
-```bash
-git remote add origin git@github.com:h4kbas/sql-migration-tool.git
-git push -u origin master
-```
-
-After publish, consumers install with:
-
-```bash
-npm install sql-migration-tool
-```
-
-Or in `package.json`:
-
-```json
-"sql-migration-tool": "^1.0.0"
-```
-
 ## Notes
 
 - Source of truth is SQL in `models/`, `controllers/`, `seeds/`. Saved files in `migrations/` are debug artifacts.
-- Tool runs SQL via local `psql` using `database` config and `.env` fallbacks.
+- Tool runs SQL via local `psql` using `database` config and `.env` fallbacks. Requires `psql` on PATH.
+- Logs progress during discover, compile, and execution (file counts, SQL size, timings).
 - Optional PostgREST reload when `postgrestReload` is true.
+- Package authors can ship reusable SQL under `node_modules/<package>/sql/` for `// @include`.
